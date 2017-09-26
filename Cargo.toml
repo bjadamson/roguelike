@@ -1,0 +1,8 @@
+[package]
+name = "roguelike"
+version = "0.1.0"
+authors = ["Benjamin Adamson <adamson.benjamin@gmail.com>"]
+
+[dependencies]
+rand = "0.3.16"
+tcod = "0.12"
