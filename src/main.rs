@@ -17,6 +17,9 @@ const FOV_ALGO: FovAlgorithm = FovAlgorithm::Basic;  // default FOV algorithm
 const FOV_LIGHT_WALLS: bool = true;  // light walls or not
 const TORCH_RADIUS: i32 = 10;
 
+// npcs
+const MAX_ROOM_MONSTERS: i32 = 3;
+
 const COLOR_DARK_WALL: colors::Color = colors::Color {
     r: 0,
     g: 0,
@@ -48,10 +51,10 @@ fn main() {
     tcod::system::set_fps(LIMIT_FPS);
     let mut con = Offscreen::new(SCREEN_WIDTH, SCREEN_HEIGHT);
 
-    let (mut tmap, (start_x, start_y)) = make_tilemap();
-    let player = Object::new(start_x, start_y, '@', colors::WHITE);
-    let npc = Object::new(SCREEN_WIDTH / 2 - 5, SCREEN_HEIGHT / 2, '#', colors::YELLOW);
-    let mut objects = [player, npc];
+    let player = Object::new(0, 0, 'X', colors::RED);
+    let mut objects = vec![player];
+    let (mut tmap, (start_x, start_y)) = make_tilemap(&mut objects);
+    objects[0] = Object::new(start_x, start_y, '@', colors::WHITE);
 
     let mut fov_map = FovMap::new(MAP_WIDTH, MAP_HEIGHT);
     for y in 0..MAP_HEIGHT {
@@ -85,6 +88,28 @@ fn main() {
         if exit {
             break;
         }
+    }
+}
+
+fn place_objects(room: Rect, objects: &mut Vec<Object>) {
+    // choose random number of monsters
+    use rand::Rng;
+    let num_monsters = rand::thread_rng().gen_range(0, MAX_ROOM_MONSTERS + 1);
+
+    for _ in 0..num_monsters {
+        // choose random spot for this monster
+        let x = rand::thread_rng().gen_range(room.x1 + 1, room.x2);
+        let y = rand::thread_rng().gen_range(room.y1 + 1, room.y2);
+
+        let monster = if rand::random::<f32>() < 0.8 {
+            // 80% chance of getting an orc
+            // create an orc
+            Object::new(x, y, 'o', colors::RED)
+        } else {
+            Object::new(x, y, 'T', colors::DARKER_GREEN)
+        };
+
+        objects.push(monster);
     }
 }
 
@@ -223,7 +248,7 @@ impl IndexMut<i32> for TileMap {
     }
 }
 
-fn make_tilemap() -> (TileMap, (i32, i32)) {
+fn make_tilemap(objects: &mut Vec<Object>) -> (TileMap, (i32, i32)) {
     use rand::Rng;
 
     // fill map with "blocked" tiles
@@ -241,6 +266,8 @@ fn make_tilemap() -> (TileMap, (i32, i32)) {
         let y = rand::thread_rng().gen_range(0, MAP_HEIGHT - h);
 
         let new_room = Rect::new(x, y, w, h);
+        // add some content to this room, such as monsters
+        place_objects(new_room, objects);
 
         // run through the other rooms and see if they intersect with this one
         let failed = rooms.iter().any(|other_room| new_room.intersects_with(other_room));
@@ -280,7 +307,7 @@ fn make_tilemap() -> (TileMap, (i32, i32)) {
         // finally, append the new room to the list
         rooms.push(new_room);
     }
-    (tmap, starting_position)
+    (tmap, (starting_position))
 }
 
 fn render_all(root: &mut Root,
