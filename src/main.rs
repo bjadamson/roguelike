@@ -59,10 +59,7 @@ fn main() {
     let mut fov_map = FovMap::new(MAP_WIDTH, MAP_HEIGHT);
     for y in 0..MAP_HEIGHT {
         for x in 0..MAP_WIDTH {
-            fov_map.set(x,
-                        y,
-                        !tmap[y * MAP_WIDTH + x].block_sight,
-                        !tmap[y * MAP_WIDTH + x].blocked);
+            fov_map.set(x, y, !tmap[(x, y)].block_sight, !tmap[(x, y)].blocked);
         }
     }
     let mut previous_player_position = (-1, -1);
@@ -177,23 +174,23 @@ impl Rect {
     const MAX_ROOMS: i32 = 30;
 }
 
-fn create_room(room: Rect, map: &mut TileMap) {
+fn create_room(room: Rect, tmap: &mut TileMap) {
     for x in (room.x1 + 1)..room.x2 {
         for y in (room.y1 + 1)..room.y2 {
-            map[y * MAP_WIDTH + x] = Tile::empty();
+            tmap[(x, y)] = Tile::empty();
         }
     }
 }
 
-fn create_h_tunnel(x1: i32, x2: i32, y: i32, map: &mut TileMap) {
+fn create_h_tunnel(x1: i32, x2: i32, y: i32, tmap: &mut TileMap) {
     for x in std::cmp::min(x1, x2)..(std::cmp::max(x1, x2) + 1) {
-        map[y * MAP_WIDTH + x] = Tile::empty();
+        tmap[(x, y)] = Tile::empty();
     }
 }
 
-fn create_v_tunnel(y1: i32, y2: i32, x: i32, map: &mut TileMap) {
+fn create_v_tunnel(y1: i32, y2: i32, x: i32, tmap: &mut TileMap) {
     for y in std::cmp::min(y1, y2)..(std::cmp::max(y1, y2) + 1) {
-        map[y * MAP_WIDTH + x] = Tile::empty();
+        tmap[(x, y)] = Tile::empty();
     }
 }
 
@@ -234,17 +231,17 @@ impl TileMap {
 
 use std::ops::{Index, IndexMut};
 
-impl Index<i32> for TileMap {
+impl Index<(i32, i32)> for TileMap {
     type Output = Tile;
 
-    fn index(&self, idx: i32) -> &Tile {
-        &self.data[idx as usize]
+    fn index(&self, (x, y): (i32, i32)) -> &Tile {
+        &self.data[(x + y * MAP_WIDTH) as usize]
     }
 }
 
-impl IndexMut<i32> for TileMap {
-    fn index_mut<'a>(&'a mut self, idx: i32) -> &'a mut Tile {
-        &mut self.data[idx as usize]
+impl IndexMut<(i32, i32)> for TileMap {
+    fn index_mut<'a>(&'a mut self, (x, y): (i32, i32)) -> &'a mut Tile {
+        &mut self.data[(x + y * MAP_WIDTH) as usize]
     }
 }
 
@@ -261,6 +258,7 @@ fn make_tilemap(objects: &mut Vec<Object>) -> (TileMap, (i32, i32)) {
         // random width and height
         let w = rand::thread_rng().gen_range(Rect::ROOM_MIN_SIZE, Rect::ROOM_MAX_SIZE + 1);
         let h = rand::thread_rng().gen_range(Rect::ROOM_MIN_SIZE, Rect::ROOM_MAX_SIZE + 1);
+
         // random position without going out of the boundaries of the map
         let x = rand::thread_rng().gen_range(0, MAP_WIDTH - w);
         let y = rand::thread_rng().gen_range(0, MAP_HEIGHT - h);
@@ -325,7 +323,7 @@ fn render_all(root: &mut Root,
         for y in 0..MAP_HEIGHT {
             for x in 0..MAP_WIDTH {
                 let visible = fov_map.is_in_fov(x, y);
-                let wall = tmap[y * MAP_WIDTH + x].block_sight;
+                let wall = tmap[(x, y)].block_sight;
                 let color = match (visible, wall) {
                     // outside of field of view:
                     (false, true) => COLOR_DARK_WALL,
@@ -334,7 +332,7 @@ fn render_all(root: &mut Root,
                     (true, true) => COLOR_LIGHT_WALL,
                     (true, false) => COLOR_LIGHT_GROUND,
                 };
-                let explored = &mut tmap[y * MAP_WIDTH + x].explored;
+                let explored = &mut tmap[(x, y)].explored;
                 if visible {
                     // since it's visible, explore it
                     *explored = true;
@@ -392,6 +390,14 @@ impl Object {
         // move by the given amount
         self.x += dx;
         self.y += dy;
+    }
+
+    pub fn pos(&self) -> (i32, i32) {
+        (self.x, self.y)
+    }
+    pub fn set_pos(&mut self, x: i32, y: i32) {
+        self.x = x;
+        self.y = y;
     }
 
     /// set the color and then draw the character that represents this object at its position
