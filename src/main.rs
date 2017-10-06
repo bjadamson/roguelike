@@ -5,6 +5,9 @@ use tcod::console::*;
 use tcod::colors;
 use tcod::map::{Map as FovMap, FovAlgorithm};
 
+mod tile;
+use tile::{Tile, TileMap};
+
 const SCREEN_WIDTH: i32 = 80;
 const SCREEN_HEIGHT: i32 = 50;
 const LIMIT_FPS: i32 = 20;
@@ -194,63 +197,12 @@ fn create_v_tunnel(y1: i32, y2: i32, x: i32, tmap: &mut TileMap) {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-struct Tile {
-    blocked: bool,
-    block_sight: bool,
-    explored: bool,
-}
-
-impl Tile {
-    pub fn empty() -> Self {
-        Tile {
-            blocked: false,
-            block_sight: false,
-            explored: false,
-        }
-    }
-
-    pub fn wall() -> Self {
-        Tile {
-            blocked: true,
-            block_sight: true,
-            explored: false,
-        }
-    }
-}
-
-struct TileMap {
-    data: Vec<Tile>,
-}
-
-impl TileMap {
-    pub fn from_vec(data: Vec<Tile>) -> TileMap {
-        TileMap { data: data }
-    }
-}
-
-use std::ops::{Index, IndexMut};
-
-impl Index<(i32, i32)> for TileMap {
-    type Output = Tile;
-
-    fn index(&self, (x, y): (i32, i32)) -> &Tile {
-        &self.data[(x + y * MAP_WIDTH) as usize]
-    }
-}
-
-impl IndexMut<(i32, i32)> for TileMap {
-    fn index_mut<'a>(&'a mut self, (x, y): (i32, i32)) -> &'a mut Tile {
-        &mut self.data[(x + y * MAP_WIDTH) as usize]
-    }
-}
-
 fn make_tilemap(objects: &mut Vec<Object>) -> (TileMap, (i32, i32)) {
     use rand::Rng;
 
     // fill map with "blocked" tiles
     let map = vec![Tile::wall(); (MAP_HEIGHT * MAP_WIDTH) as usize];
-    let mut tmap = TileMap::from_vec(map);
+    let mut tmap = TileMap::from_data(map, MAP_WIDTH);
     let mut rooms = vec![];
     let mut starting_position = (0, 0);
 
