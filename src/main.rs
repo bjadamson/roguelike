@@ -1,6 +1,8 @@
 extern crate rand;
 extern crate tcod;
 
+use rand::Rng;
+
 use tcod::console::*;
 use tcod::colors;
 use tcod::map::{Map as FovMap, FovAlgorithm};
@@ -18,7 +20,7 @@ const MAP_HEIGHT: i32 = 45;
 // fov
 const FOV_ALGO: FovAlgorithm = FovAlgorithm::Basic;  // default FOV algorithm
 const FOV_LIGHT_WALLS: bool = true;  // light walls or not
-const TORCH_RADIUS: i32 = 10;
+const TORCH_RADIUS: i32 = 0;
 
 // npcs
 const MAX_ROOM_MONSTERS: i32 = 3;
@@ -54,10 +56,10 @@ fn main() {
     tcod::system::set_fps(LIMIT_FPS);
     let mut con = Offscreen::new(SCREEN_WIDTH, SCREEN_HEIGHT);
 
-    let player = Object::new(0, 0, 'X', colors::RED);
+    let player = Object::new(0, 0, 'X', "object", colors::RED, true, false);
     let mut objects = vec![player];
-    let (mut tmap, (start_x, start_y)) = make_tilemap(&mut objects);
-    objects[0] = Object::new(start_x, start_y, '@', colors::WHITE);
+    let (mut tmap, (start_x, start_y)) = make_tilemap((MAP_WIDTH, MAP_HEIGHT), &mut objects);
+    objects[0] = Object::new(start_x, start_y, '@', "player", colors::WHITE, true, true);
 
     let mut fov_map = FovMap::new(MAP_WIDTH, MAP_HEIGHT);
     for y in 0..MAP_HEIGHT {
@@ -84,36 +86,65 @@ fn main() {
 
         // handle keys and exit game if needed
         previous_player_position = (objects[0].x, objects[0].y);
-        let exit = handle_keys(&mut root, &mut objects[0]);
+        let exit = handle_keys(&mut root, &tmap, &mut objects);
         if exit {
             break;
         }
     }
 }
 
-fn place_objects(room: Rect, objects: &mut Vec<Object>) {
+fn is_blocked(x: i32, y: i32, tmap: &TileMap, objects: &[Object]) -> bool {
+    // first test the map tile
+    if tmap[(x, y)].blocked {
+        return true;
+    }
+    // now check for any blocking objects
+    objects.iter().any(|object| object.blocks && object.pos() == (x, y))
+}
+
+/// move by the given amount, if the destination is not blocked
+fn move_by(id: usize, dx: i32, dy: i32, tmap: &TileMap, objects: &mut [Object]) {
+    let (x, y) = objects[id].pos();
+    if !is_blocked(x + dx, y + dy, tmap, objects) {
+        objects[id].set_pos(x + dx, y + dy);
+    }
+}
+
+fn generate_monster_position(room: &Rect, tmap: &TileMap, objects: &[Object]) -> (i32, i32) {
+    let (mut x, mut y);
+    loop {
+        // choose random spot for this monster
+        x = rand::thread_rng().gen_range(room.x1 + 1, room.x2);
+        y = rand::thread_rng().gen_range(room.y1 + 1, room.y2);
+
+        // only place it if the tile is not blocked
+        if !is_blocked(x, y, tmap, objects) {
+            break;
+        }
+    }
+    (x, y)
+}
+
+fn place_objects(room: Rect, tmap: &TileMap, objects: &mut Vec<Object>) {
     // choose random number of monsters
-    use rand::Rng;
     let num_monsters = rand::thread_rng().gen_range(0, MAX_ROOM_MONSTERS + 1);
 
     for _ in 0..num_monsters {
         // choose random spot for this monster
-        let x = rand::thread_rng().gen_range(room.x1 + 1, room.x2);
-        let y = rand::thread_rng().gen_range(room.y1 + 1, room.y2);
+        let (x, y) = generate_monster_position(&room, tmap, objects);
 
-        let monster = if rand::random::<f32>() < 0.8 {
-            // 80% chance of getting an orc
+        // %chance of getting an orc
+        let monster = if rand::random::<f32>() < 0.5 {
             // create an orc
-            Object::new(x, y, 'o', colors::RED)
+            Object::new(x, y, 'o', "orc", colors::RED, true, true)
         } else {
-            Object::new(x, y, 'T', colors::DARKER_GREEN)
+            Object::new(x, y, 'T', "troll", colors::DARKER_GREEN, true, true)
         };
-
         objects.push(monster);
     }
 }
 
-fn handle_keys(root: &mut Root, player: &mut Object) -> bool {
+fn handle_keys(root: &mut Root, tmap: &TileMap, objects: &mut [Object]) -> bool {
     use tcod::input::Key;
     use tcod::input::KeyCode::*;
 
@@ -123,6 +154,7 @@ fn handle_keys(root: &mut Root, player: &mut Object) -> bool {
     };
 
     let key = root.wait_for_keypress(true);
+    let player_id = 0;
     match key {
         Key { code: Enter, alt: true, .. } => {
             // Alt+Enter: toggle fullscreen
@@ -130,11 +162,12 @@ fn handle_keys(root: &mut Root, player: &mut Object) -> bool {
         }
         Key { code: Escape, .. } => return true,  // exit game
 
+        // fn move_by(id: usize, dx: i32, dy: i32, tmap: &TileMap, objects: &mut [Object])
         // movement keys
-        Key { printable: 'w', .. } => player.move_by(0, -1),
-        Key { printable: 's', .. } => player.move_by(0, 1),
-        Key { printable: 'a', .. } => player.move_by(-1, 0),
-        Key { printable: 'd', .. } => player.move_by(1, 0),
+        Key { printable: 'w', .. } => move_by(player_id, 0, -1, tmap, objects),
+        Key { printable: 's', .. } => move_by(player_id, 0, 1, tmap, objects),
+        Key { printable: 'a', .. } => move_by(player_id, -1, 0, tmap, objects),
+        Key { printable: 'd', .. } => move_by(player_id, 1, 0, tmap, objects),
 
         _ => {}
     }
@@ -197,12 +230,12 @@ fn create_v_tunnel(y1: i32, y2: i32, x: i32, tmap: &mut TileMap) {
     }
 }
 
-fn make_tilemap(objects: &mut Vec<Object>) -> (TileMap, (i32, i32)) {
+fn make_tilemap((width, height): (i32, i32), objects: &mut Vec<Object>) -> (TileMap, (i32, i32)) {
     use rand::Rng;
 
     // fill map with "blocked" tiles
-    let map = vec![Tile::wall(); (MAP_HEIGHT * MAP_WIDTH) as usize];
-    let mut tmap = TileMap::from_data(map, MAP_WIDTH);
+    let map = vec![Tile::wall(); (height * width) as usize];
+    let mut tmap = TileMap::from_data(map, width);
     let mut rooms = vec![];
     let mut starting_position = (0, 0);
 
@@ -212,12 +245,11 @@ fn make_tilemap(objects: &mut Vec<Object>) -> (TileMap, (i32, i32)) {
         let h = rand::thread_rng().gen_range(Rect::ROOM_MIN_SIZE, Rect::ROOM_MAX_SIZE + 1);
 
         // random position without going out of the boundaries of the map
-        let x = rand::thread_rng().gen_range(0, MAP_WIDTH - w);
-        let y = rand::thread_rng().gen_range(0, MAP_HEIGHT - h);
+        let x = rand::thread_rng().gen_range(0, width - w);
+        let y = rand::thread_rng().gen_range(0, height - h);
 
         let new_room = Rect::new(x, y, w, h);
-        // add some content to this room, such as monsters
-        place_objects(new_room, objects);
+
 
         // run through the other rooms and see if they intersect with this one
         let failed = rooms.iter().any(|other_room| new_room.intersects_with(other_room));
@@ -242,7 +274,7 @@ fn make_tilemap(objects: &mut Vec<Object>) -> (TileMap, (i32, i32)) {
             // center coordinates of the previous room
             let (prev_x, prev_y) = rooms[rooms.len() - 1].center();
 
-            // toss a coin (random bool value -- either true or false)
+            // rand bool
             if rand::random() {
                 // first move horizontally, then vertically
                 create_h_tunnel(prev_x, new_x, prev_y, &mut tmap);
@@ -254,8 +286,14 @@ fn make_tilemap(objects: &mut Vec<Object>) -> (TileMap, (i32, i32)) {
             }
         }
 
+        // add some content to this room, such as monsters
+        place_objects(new_room, &tmap, objects);
+
         // finally, append the new room to the list
         rooms.push(new_room);
+    }
+
+    for _ in 0..Rect::MAX_ROOMS {
     }
     (tmap, (starting_position))
 }
@@ -326,22 +364,31 @@ struct Object {
     y: i32,
     char: char,
     color: colors::Color,
+
+    name: String,
+    blocks: bool,
+    alive: bool,
 }
 
 impl Object {
-    pub fn new(x: i32, y: i32, char: char, color: colors::Color) -> Self {
+    pub fn new(x: i32,
+               y: i32,
+               char: char,
+               name: &str,
+               color: colors::Color,
+               blocks: bool,
+               alive: bool)
+               -> Self {
         Object {
             x: x,
             y: y,
             char: char,
             color: color,
-        }
-    }
 
-    pub fn move_by(&mut self, dx: i32, dy: i32) {
-        // move by the given amount
-        self.x += dx;
-        self.y += dy;
+            name: name.into(),
+            blocks: blocks,
+            alive: alive,
+        }
     }
 
     pub fn pos(&self) -> (i32, i32) {
