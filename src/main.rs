@@ -71,12 +71,10 @@ fn main() {
 
     while !root.window_closed() {
         let fov_recompute = previous_player_position != (objects[0].x, objects[0].y);
-        render_all(&mut root,
-                   &mut con,
-                   &objects,
-                   &mut tmap,
-                   &mut fov_map,
-                   fov_recompute);
+        if fov_recompute {
+            compute_fov(&mut fov_map, &mut con, &mut tmap, &objects);
+        }
+        render_all(&mut root, &mut con, &objects, &mut fov_map);
         root.flush();
 
         // erase all objects at their old locations, before they move
@@ -162,7 +160,6 @@ fn handle_keys(root: &mut Root, tmap: &TileMap, objects: &mut [Object]) -> bool 
         }
         Key { code: Escape, .. } => return true,  // exit game
 
-        // fn move_by(id: usize, dx: i32, dy: i32, tmap: &TileMap, objects: &mut [Object])
         // movement keys
         Key { printable: 'w', .. } => move_by(player_id, 0, -1, tmap, objects),
         Key { printable: 's', .. } => move_by(player_id, 0, 1, tmap, objects),
@@ -210,12 +207,44 @@ impl Rect {
     const MAX_ROOMS: i32 = 30;
 }
 
-fn create_room(room: Rect, tmap: &mut TileMap) {
-    for x in (room.x1 + 1)..room.x2 {
-        for y in (room.y1 + 1)..room.y2 {
+fn try_create_room((width, height): (i32, i32),
+                   rooms: &Vec<Rect>,
+                   tmap: &mut TileMap)
+                   -> Option<Rect> {
+    use rand::Rng;
+    // random width and height
+    let w = rand::thread_rng().gen_range(Rect::ROOM_MIN_SIZE, Rect::ROOM_MAX_SIZE + 1);
+    let h = rand::thread_rng().gen_range(Rect::ROOM_MIN_SIZE, Rect::ROOM_MAX_SIZE + 1);
+
+    // random position without going out of the boundaries of the map
+    let x = rand::thread_rng().gen_range(0, width - w);
+    let y = rand::thread_rng().gen_range(0, height - h);
+
+    let new_room = Rect::new(x, y, w, h);
+
+    // run through the other rooms and see if they intersect with this one
+    let intersects_other_room = rooms.iter().any(|other_room| new_room.intersects_with(other_room));
+    if intersects_other_room {
+        return None;
+    }
+    for x in (new_room.x1 + 1)..new_room.x2 {
+        for y in (new_room.y1 + 1)..new_room.y2 {
             tmap[(x, y)] = Tile::empty();
         }
     }
+    Some(new_room)
+}
+
+fn create_room((width, height): (i32, i32), rooms: &Vec<Rect>, tmap: &mut TileMap) -> Rect {
+    let mut new_room;
+    loop {
+        new_room = try_create_room((width, height), rooms, tmap);
+        if new_room.is_some() {
+            break;
+        };
+    }
+
+    new_room.expect("Created invalid room.")
 }
 
 fn create_h_tunnel(x1: i32, x2: i32, y: i32, tmap: &mut TileMap) {
@@ -231,8 +260,6 @@ fn create_v_tunnel(y1: i32, y2: i32, x: i32, tmap: &mut TileMap) {
 }
 
 fn make_tilemap((width, height): (i32, i32), objects: &mut Vec<Object>) -> (TileMap, (i32, i32)) {
-    use rand::Rng;
-
     // fill map with "blocked" tiles
     let map = vec![Tile::wall(); (height * width) as usize];
     let mut tmap = TileMap::from_data(map, width);
@@ -240,26 +267,7 @@ fn make_tilemap((width, height): (i32, i32), objects: &mut Vec<Object>) -> (Tile
     let mut starting_position = (0, 0);
 
     for _ in 0..Rect::MAX_ROOMS {
-        // random width and height
-        let w = rand::thread_rng().gen_range(Rect::ROOM_MIN_SIZE, Rect::ROOM_MAX_SIZE + 1);
-        let h = rand::thread_rng().gen_range(Rect::ROOM_MIN_SIZE, Rect::ROOM_MAX_SIZE + 1);
-
-        // random position without going out of the boundaries of the map
-        let x = rand::thread_rng().gen_range(0, width - w);
-        let y = rand::thread_rng().gen_range(0, height - h);
-
-        let new_room = Rect::new(x, y, w, h);
-
-
-        // run through the other rooms and see if they intersect with this one
-        let failed = rooms.iter().any(|other_room| new_room.intersects_with(other_room));
-        if failed {
-            // this means there are intersections, so this room is invalid (just skip)
-            continue;
-        }
-
-        // "paint" it to the map's tiles
-        create_room(new_room, &mut tmap);
+        let new_room = create_room((width, height), &rooms, &mut tmap);
 
         // center coordinates of the new room, will be useful later
         let (new_x, new_y) = new_room.center();
@@ -292,50 +300,10 @@ fn make_tilemap((width, height): (i32, i32), objects: &mut Vec<Object>) -> (Tile
         // finally, append the new room to the list
         rooms.push(new_room);
     }
-
-    for _ in 0..Rect::MAX_ROOMS {
-    }
     (tmap, (starting_position))
 }
 
-fn render_all(root: &mut Root,
-              con: &mut Offscreen,
-              objects: &[Object],
-              tmap: &mut TileMap,
-              fov_map: &mut FovMap,
-              fov_recompute: bool) {
-    if fov_recompute {
-        // recompute FOV if needed (the player moved or something)
-        let player = &objects[0];
-        fov_map.compute_fov(player.x, player.y, TORCH_RADIUS, FOV_LIGHT_WALLS, FOV_ALGO);
-
-        // go through all tiles, and set their background color
-        for y in 0..MAP_HEIGHT {
-            for x in 0..MAP_WIDTH {
-                let visible = fov_map.is_in_fov(x, y);
-                let wall = tmap[(x, y)].block_sight;
-                let color = match (visible, wall) {
-                    // outside of field of view:
-                    (false, true) => COLOR_DARK_WALL,
-                    (false, false) => COLOR_DARK_GROUND,
-                    // inside fov:
-                    (true, true) => COLOR_LIGHT_WALL,
-                    (true, false) => COLOR_LIGHT_GROUND,
-                };
-                let explored = &mut tmap[(x, y)].explored;
-                if visible {
-                    // since it's visible, explore it
-                    *explored = true;
-                }
-                if *explored {
-                    // show explored tiles only (any visible tile is explored already)
-                    con.set_char_background(x, y, color, BackgroundFlag::Set);
-                }
-                // con.set_char_background(x, y, color, BackgroundFlag::Set);
-            }
-        }
-    }
-
+fn render_all(root: &mut Root, con: &mut Offscreen, objects: &[Object], fov_map: &mut FovMap) {
     // draw all objects in the list
     for object in objects {
         if fov_map.is_in_fov(object.x, object.y) {
@@ -356,6 +324,38 @@ fn render_all(root: &mut Root,
          dest_xy,
          foreground_alpha,
          bg_alpha);
+}
+
+fn compute_fov(fov_map: &mut FovMap, con: &mut Offscreen, tmap: &mut TileMap, objects: &[Object]) {
+    // recompute FOV if needed (the player moved or something)
+    let player = &objects[0];
+    fov_map.compute_fov(player.x, player.y, TORCH_RADIUS, FOV_LIGHT_WALLS, FOV_ALGO);
+
+    // go through all tiles, and set their background color
+    for y in 0..MAP_HEIGHT {
+        for x in 0..MAP_WIDTH {
+            let visible = fov_map.is_in_fov(x, y);
+            let wall = tmap[(x, y)].block_sight;
+            let color = match (visible, wall) {
+                // outside of field of view:
+                (false, true) => COLOR_DARK_WALL,
+                (false, false) => COLOR_DARK_GROUND,
+                // inside fov:
+                (true, true) => COLOR_LIGHT_WALL,
+                (true, false) => COLOR_LIGHT_GROUND,
+            };
+            let explored = &mut tmap[(x, y)].explored;
+            if visible {
+                // since it's visible, explore it
+                *explored = true;
+            }
+            if *explored {
+                // show explored tiles only (any visible tile is explored already)
+                con.set_char_background(x, y, color, BackgroundFlag::Set);
+            }
+            // con.set_char_background(x, y, color, BackgroundFlag::Set);
+        }
+    }
 }
 
 #[derive(Debug)]
